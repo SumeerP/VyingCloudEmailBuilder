@@ -5,7 +5,14 @@
       "Bash(npm install:*)",
       "Bash(npx next build)",
       "Bash(git init:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "mcp__github__create_repository",
+      "Bash(git remote add:*)",
+      "Bash(git push:*)",
+      "mcp__mcp-registry__search_mcp_registry",
+      "WebFetch(domain:experienceleague.adobe.com)",
+      "WebFetch(domain:developer.adobe.com)"
     ]
   }
 }
