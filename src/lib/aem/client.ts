@@ -20,6 +20,49 @@ function baseUrl(): string {
   return AEM_AUTHOR_HOST.replace(/\/+$/, "");
 }
 
+/** Custom error for AEM environment issues (hibernation, etc.) */
+export class AEMEnvironmentError extends Error {
+  status: string;
+  healthy: string;
+
+  constructor(status: string, healthy: string) {
+    const msg =
+      healthy === "hibernated"
+        ? "AEM environment is hibernated. Please wake it up in Cloud Manager or visit the Author URL in your browser, then wait a few minutes."
+        : `AEM environment is unavailable (status: ${status}, healthy: ${healthy}). Check Cloud Manager for details.`;
+    super(msg);
+    this.name = "AEMEnvironmentError";
+    this.status = status;
+    this.healthy = healthy;
+  }
+}
+
+/**
+ * Checks if AEM returned an HTML error page (e.g. hibernated env)
+ * instead of JSON. Throws AEMEnvironmentError if detected.
+ */
+async function assertJsonResponse(res: Response, operation: string): Promise<void> {
+  const contentType = res.headers.get("content-type") || "";
+
+  // AEM returns text/html when the env is hibernated or unavailable
+  if (contentType.includes("text/html")) {
+    const html = await res.text();
+
+    // Parse status and healthy from the HTML error page
+    const statusMatch = html.match(/status="(\d+)"/);
+    const healthyMatch = html.match(/healthy="([^"]+)"/);
+    const status = statusMatch?.[1] || String(res.status);
+    const healthy = healthyMatch?.[1] || "unknown";
+
+    throw new AEMEnvironmentError(status, healthy);
+  }
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`AEM ${operation} failed (${res.status}): ${text}`);
+  }
+}
+
 // ──────────────────────────────────────────────
 // Content Fragment Models
 // ──────────────────────────────────────────────
@@ -33,7 +76,7 @@ export async function listModels(cursor?: string) {
   const url = `${baseUrl()}/adobe/sites/cf/models${params.toString() ? "?" + params.toString() : ""}`;
   const res = await fetch(url, { headers });
 
-  if (!res.ok) throw new Error(`AEM listModels failed (${res.status}): ${await res.text()}`);
+  await assertJsonResponse(res, "listModels");
   return res.json();
 }
 
@@ -43,7 +86,7 @@ export async function getModel(modelId: string) {
   const url = `${baseUrl()}/adobe/sites/cf/models/${modelId}`;
   const res = await fetch(url, { headers });
 
-  if (!res.ok) throw new Error(`AEM getModel failed (${res.status}): ${await res.text()}`);
+  await assertJsonResponse(res, "getModel");
   return res.json();
 }
 
@@ -70,7 +113,7 @@ export async function listFragments(params?: ListFragmentsParams) {
   const url = `${baseUrl()}/adobe/sites/cf/fragments${qs.toString() ? "?" + qs.toString() : ""}`;
   const res = await fetch(url, { headers });
 
-  if (!res.ok) throw new Error(`AEM listFragments failed (${res.status}): ${await res.text()}`);
+  await assertJsonResponse(res, "listFragments");
   return res.json();
 }
 
@@ -80,7 +123,7 @@ export async function getFragment(fragmentId: string) {
   const url = `${baseUrl()}/adobe/sites/cf/fragments/${fragmentId}`;
   const res = await fetch(url, { headers });
 
-  if (!res.ok) throw new Error(`AEM getFragment failed (${res.status}): ${await res.text()}`);
+  await assertJsonResponse(res, "getFragment");
   return res.json();
 }
 
@@ -108,7 +151,7 @@ export async function createFragment(payload: CreateFragmentPayload) {
     }),
   });
 
-  if (!res.ok) throw new Error(`AEM createFragment failed (${res.status}): ${await res.text()}`);
+  await assertJsonResponse(res, "createFragment");
   return res.json();
 }
 
@@ -128,7 +171,7 @@ export async function updateFragment(fragmentId: string, payload: UpdateFragment
     body: JSON.stringify(payload),
   });
 
-  if (!res.ok) throw new Error(`AEM updateFragment failed (${res.status}): ${await res.text()}`);
+  await assertJsonResponse(res, "updateFragment");
   return res.json();
 }
 
@@ -141,7 +184,7 @@ export async function deleteFragment(fragmentId: string) {
     headers,
   });
 
-  if (!res.ok) throw new Error(`AEM deleteFragment failed (${res.status}): ${await res.text()}`);
+  await assertJsonResponse(res, "deleteFragment");
   return { success: true };
 }
 
@@ -155,6 +198,6 @@ export async function listVariations(fragmentId: string) {
   const url = `${baseUrl()}/adobe/sites/cf/fragments/${fragmentId}/variations`;
   const res = await fetch(url, { headers });
 
-  if (!res.ok) throw new Error(`AEM listVariations failed (${res.status}): ${await res.text()}`);
+  await assertJsonResponse(res, "listVariations");
   return res.json();
 }

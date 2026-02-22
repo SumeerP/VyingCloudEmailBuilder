@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { createFragment, updateFragment } from "@/lib/aem/client";
+import { createFragment, updateFragment, AEMEnvironmentError } from "@/lib/aem/client";
 
 /**
  * AEM OpenAPI Content Fragment publish/upsert proxy.
@@ -53,6 +53,12 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, data });
   } catch (error: unknown) {
+    if (error instanceof AEMEnvironmentError) {
+      return NextResponse.json(
+        { error: error.message, code: "AEM_UNAVAILABLE", healthy: error.healthy },
+        { status: 503 }
+      );
+    }
     const message = error instanceof Error ? error.message : "Failed to publish to AEM";
     console.error("AEM publish error:", message);
     return NextResponse.json({ error: message }, { status: 502 });

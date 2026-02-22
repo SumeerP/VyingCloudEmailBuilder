@@ -5,7 +5,7 @@
  * Required env vars:
  *   AEM_IMS_CLIENT_ID     - from Adobe Developer Console project
  *   AEM_IMS_CLIENT_SECRET - from Adobe Developer Console project
- *   AEM_IMS_SCOPES        - comma-separated scopes (e.g. "aem.folders,aem.sites")
+ *   AEM_IMS_SCOPES        - comma-separated scopes (e.g. "AdobeID,openid,aem.folders,aem.fragments.management")
  */
 
 const IMS_TOKEN_ENDPOINT = "https://ims-na1.adobelogin.com/ims/token/v3";
@@ -20,7 +20,7 @@ export async function getIMSAccessToken(): Promise<string> {
 
   const clientId = process.env.AEM_IMS_CLIENT_ID;
   const clientSecret = process.env.AEM_IMS_CLIENT_SECRET;
-  const scopes = process.env.AEM_IMS_SCOPES || "aem.folders,aem.sites";
+  const scopes = process.env.AEM_IMS_SCOPES || "AdobeID,openid,aem.folders,aem.fragments.management";
 
   if (!clientId || !clientSecret) {
     throw new Error("AEM IMS credentials not configured (AEM_IMS_CLIENT_ID, AEM_IMS_CLIENT_SECRET)");

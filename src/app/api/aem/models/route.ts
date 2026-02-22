@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { listModels, getModel } from "@/lib/aem/client";
+import { listModels, getModel, AEMEnvironmentError } from "@/lib/aem/client";
 
 /**
  * AEM OpenAPI Content Fragment Models proxy.
@@ -33,6 +33,12 @@ export async function GET(request: NextRequest) {
     const data = await listModels(cursor);
     return NextResponse.json(data);
   } catch (error: unknown) {
+    if (error instanceof AEMEnvironmentError) {
+      return NextResponse.json(
+        { error: error.message, code: "AEM_UNAVAILABLE", healthy: error.healthy },
+        { status: 503 }
+      );
+    }
     const message = error instanceof Error ? error.message : "Failed to fetch models";
     console.error("AEM models error:", message);
     return NextResponse.json({ error: message }, { status: 502 });

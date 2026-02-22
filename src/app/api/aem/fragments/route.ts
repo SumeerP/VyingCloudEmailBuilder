@@ -7,6 +7,7 @@ import {
   updateFragment,
   deleteFragment,
   listVariations,
+  AEMEnvironmentError,
 } from "@/lib/aem/client";
 
 /**
@@ -20,6 +21,18 @@ async function requireAuth() {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Unauthorized");
   return user;
+}
+
+function handleAEMError(error: unknown, fallbackMsg: string) {
+  if (error instanceof AEMEnvironmentError) {
+    return NextResponse.json(
+      { error: error.message, code: "AEM_UNAVAILABLE", healthy: error.healthy },
+      { status: 503 }
+    );
+  }
+  const message = error instanceof Error ? error.message : fallbackMsg;
+  console.error("AEM proxy error:", message);
+  return NextResponse.json({ error: message }, { status: 502 });
 }
 
 // ─── GET: List or fetch fragments ───────────────────────────
@@ -68,9 +81,7 @@ export async function GET(request: NextRequest) {
     });
     return NextResponse.json(data);
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to fetch from AEM";
-    console.error("AEM OpenAPI proxy error:", message);
-    return NextResponse.json({ error: message }, { status: 502 });
+    return handleAEMError(error, "Failed to fetch from AEM");
   }
 }
 
@@ -109,9 +120,7 @@ export async function POST(request: NextRequest) {
     });
     return NextResponse.json({ success: true, data });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to create fragment";
-    console.error("AEM create error:", message);
-    return NextResponse.json({ error: message }, { status: 502 });
+    return handleAEMError(error, "Failed to create fragment");
   }
 }
 
@@ -138,9 +147,7 @@ export async function PATCH(request: NextRequest) {
     const data = await updateFragment(fragmentId, { title, description, fields });
     return NextResponse.json({ success: true, data });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to update fragment";
-    console.error("AEM update error:", message);
-    return NextResponse.json({ error: message }, { status: 502 });
+    return handleAEMError(error, "Failed to update fragment");
   }
 }
 
@@ -167,8 +174,6 @@ export async function DELETE(request: NextRequest) {
     await deleteFragment(fragmentId);
     return NextResponse.json({ success: true });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to delete fragment";
-    console.error("AEM delete error:", message);
-    return NextResponse.json({ error: message }, { status: 502 });
+    return handleAEMError(error, "Failed to delete fragment");
   }
 }
