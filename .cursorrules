@@ -1,0 +1,44 @@
+You are working on VyingCloud Email Builder, a production email builder SaaS.
+
+## Stack
+- Next.js 16 (App Router, TypeScript, Turbopack)
+- Supabase (Postgres + Auth + RLS) - multi-tenant with org_id scoping
+- AEM OpenAPI Content Fragment Management API (NOT the deprecated Assets HTTP API)
+- Adobe IMS OAuth Server-to-Server for AEM auth
+
+## Key Patterns
+
+### AEM Integration
+- API base: `{AEM_AUTHOR_URL}/adobe/sites/cf/` (models, fragments, variations)
+- Auth: IMS token via `src/lib/aem/auth.ts` (client_credentials grant, cached)
+- All AEM calls go through Next.js API routes in `src/app/api/aem/`
+- Never expose AEM credentials client-side
+
+### Storage Adapter
+- Original email builder uses `window.storage.get()` / `window.storage.set()`
+- `src/lib/storage.ts` maps these to Supabase tables
+- Injected via `builder-client.tsx` — don't refactor the email builder to use Supabase directly
+
+### Multi-tenancy
+- Every table has `org_id` with RLS policies
+- On signup: trigger creates org + profile + default brand kit
+- Roles: owner, admin, editor, viewer
+
+### Email Builder Component
+- `src/components/email-builder.jsx` — ~1200 lines, intentionally JSX not TSX
+- Accepts `initialBrand` and `initialBlocks` props
+- Server component (`builder/page.tsx`) fetches data, passes to client wrapper
+
+## Files to Know
+- `src/lib/aem/client.ts` — AEM OpenAPI client with hibernation detection
+- `src/lib/aem/auth.ts` — IMS token exchange
+- `src/lib/storage.ts` — Supabase storage adapter
+- `supabase/migrations/001_initial_schema.sql` — full DB schema
+- `src/app/api/aem/` — API proxy routes (fragments, models, publish)
+
+## Rules
+- Always use AEM OpenAPI (`/adobe/sites/cf/`), never the Assets HTTP API
+- Keep AEM credentials server-side only (API routes)
+- Use RLS — never bypass org_id scoping
+- The email builder JSX file is untyped — don't add TypeScript annotations to it
+- Use `export const dynamic = "force-dynamic"` on pages that need Supabase auth
