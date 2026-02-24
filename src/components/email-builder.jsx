@@ -77,7 +77,7 @@ function F({ label, children }) { return <div style={{ marginBottom: 10 }}><labe
 function ColorF({ label, value, onChange, brandColors }) {
   return <F label={label}>
     {brandColors?.length > 0 && <div style={{ display: "flex", gap: 3, flexWrap: "wrap", marginBottom: 4 }}>
-      {brandColors.filter(Boolean).map(c => <div key={c} onClick={() => onChange(c)} title={c} style={{ width: 18, height: 18, borderRadius: 3, background: c, cursor: "pointer", border: value === c ? "2px solid #fff" : "1px solid rgba(255,255,255,0.15)", flexShrink: 0 }} />)}
+      {[...new Set(brandColors.filter(Boolean))].map((c, i) => <div key={`${c}-${i}`} onClick={() => onChange(c)} title={c} style={{ width: 18, height: 18, borderRadius: 3, background: c, cursor: "pointer", border: value === c ? "2px solid #fff" : "1px solid rgba(255,255,255,0.15)", flexShrink: 0 }} />)}
     </div>}
     <div style={{ display: "flex", gap: 4 }}>
       <input type="color" value={value || "#000000"} onChange={e => onChange(e.target.value)} style={{ width: 28, height: 28, border: "none", cursor: "pointer", borderRadius: 4 }} />
@@ -806,7 +806,7 @@ function AEMEditorPanel({ comp, onChange, onPick, brandPalette }) {
 }
 
 
-export default function EmailBuilder({ initialBrand, initialBlocks }) {
+export default function EmailBuilder({ initialBrand, initialBlocks, initialEmail, initialEmailId, onSave, onToggleEmailList }) {
   const [comps, setComps] = useState([]);
   const [selPath, setSelPath] = useState(null);
   const [meta, setMeta] = useState({ name: "Untitled Email", subject: "", preheader: "", fromName: "", fromEmail: "" });
@@ -829,7 +829,7 @@ export default function EmailBuilder({ initialBrand, initialBlocks }) {
   const [testCopied, setTestCopied] = useState(false);
   const testIframeRef = useRef(null);
   const [lastSaved, setLastSaved] = useState(null);
-  const [emailId] = useState(() => `email_${Date.now().toString(36)}`);
+  const [emailId] = useState(() => initialEmailId || crypto.randomUUID());
 
   // Load brand kit and blocks from shared storage (if not provided via props)
   useEffect(() => {
@@ -843,6 +843,25 @@ export default function EmailBuilder({ initialBrand, initialBlocks }) {
       }
     })();
   }, [initialBrand, initialBlocks]);
+
+  // Hydrate state from a loaded email (when navigating to /builder?id=xxx)
+  useEffect(() => {
+    if (!initialEmail) return;
+    setMeta({
+      name: initialEmail.name || "Untitled Email",
+      subject: initialEmail.subject || "",
+      preheader: initialEmail.preheader || "",
+      fromName: initialEmail.from_name || "",
+      fromEmail: initialEmail.from_email || "",
+    });
+    if (initialEmail.components?.length) setComps(initialEmail.components);
+    if (initialEmail.global_styles) {
+      const gs = initialEmail.global_styles;
+      setGS({ bgColor: gs.bgColor || "", contentBg: gs.contentBg || "", w: gs.w || 0, font: gs.font || "" });
+    }
+    if (initialEmail.ab_enabled) setAbOn(true);
+    if (initialEmail.ab_config) setAbCfg(initialEmail.ab_config);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sync gS with brand defaults when brand changes
   useEffect(() => {
@@ -885,21 +904,49 @@ export default function EmailBuilder({ initialBrand, initialBlocks }) {
   }
 
   async function saveBlock(blockData) {
-    const newBlock = { ...blockData, id: uid("blk") };
+    const newBlock = { ...blockData, id: crypto.randomUUID() };
     const updated = [...blocks, newBlock];
     setBlocks(updated);
-    try { await window.storage.set("content_blocks", JSON.stringify(updated), true); } catch {}
+    try { await window.storage.set("content_blocks", JSON.stringify(updated), true); } catch (e) { console.error("Save blocks failed:", e); }
   }
   async function deleteBlock(id) {
     const updated = blocks.filter(b => b.id !== id);
     setBlocks(updated);
-    try { await window.storage.set("content_blocks", JSON.stringify(updated), true); } catch {}
+    try { await window.storage.set("content_blocks", JSON.stringify(updated), true); } catch (e) { console.error("Delete block failed:", e); }
   }
   function insertBlock(block) { setAc(p => [...p, ...deepClone(block.comps)]); }
   function onDragBlock(e, blockId) { e.dataTransfer.setData("text/plain", JSON.stringify({ src: "block", blockId })); }
 
   function enableAB() { setAbCfg(p => ({ ...p, variants: p.variants.map(v => ({ ...v, comps: deepClone(comps) })) })); setAbOn(true); }
-  const save = useCallback(async () => { setSaving(true); try { const d = { id: emailId, meta, comps, abOn, abCfg, gS, brand, at: new Date().toISOString() }; await window.storage.set("emails:" + emailId, JSON.stringify(d)); setLastSaved(new Date()); } catch { } setSaving(false); }, [emailId, meta, comps, abOn, abCfg, gS, brand]);
+  const save = useCallback(async (explicit = true) => {
+    setSaving(true);
+    try {
+      const d = { id: emailId, meta, comps, abOn, abCfg, gS, brand, at: new Date().toISOString() };
+      if (onSave) {
+        await onSave(d, explicit);
+      } else {
+        await window.storage.set("emails:" + emailId, JSON.stringify(d));
+      }
+      setLastSaved(new Date());
+    } catch (e) { console.error("Save failed:", e); }
+    setSaving(false);
+  }, [emailId, meta, comps, abOn, abCfg, gS, brand, onSave]);
+
+  // Auto-save: debounce 3 seconds after meaningful state changes
+  const autoSaveTimer = useRef(null);
+  useEffect(() => {
+    if (comps.length === 0 && !initialEmail) return;
+    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = setTimeout(() => save(false), 3000);
+    return () => { if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current); };
+  }, [comps, meta, gS, abOn, abCfg]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Listen for Cmd+S / Ctrl+S from wrapper
+  useEffect(() => {
+    const handler = () => save(true);
+    window.addEventListener("email-builder-save", handler);
+    return () => window.removeEventListener("email-builder-save", handler);
+  }, [save]);
 
   // Refresh test iframe whenever relevant state changes
   useEffect(() => {
@@ -936,18 +983,8 @@ export default function EmailBuilder({ initialBrand, initialBlocks }) {
     </div>;
   }
 
-  function PropEdit() {
-    return <PropEditPanel
-      selComp={selComp}
-      selPath={selPath}
-      brand={brand}
-      brandPalette={brandPalette}
-      onUpdate={updateComp}
-      onDup={dupComp}
-      onDel={delComp}
-      onPick={setShowPicker}
-    />;
-  }
+  // PropEdit removed — using PropEditPanel directly to prevent input focus loss
+  // (Defining a component inside render creates a new type each render, causing unmount/remount)
 
   return (
     <div style={{ display: "flex", height: "100vh", background: BG, color: "#e2e8f0", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif", overflow: "hidden" }}>
@@ -1165,6 +1202,7 @@ export default function EmailBuilder({ initialBrand, initialBlocks }) {
       {/* CANVAS */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <div style={{ display: "flex", alignItems: "center", padding: "7px 14px", background: PB, borderBottom: `1px solid ${BD}`, gap: 8 }}>
+          {onToggleEmailList && <button onClick={onToggleEmailList} style={{ padding: "4px 8px", background: "#1e293b", border: "1px solid #334155", borderRadius: 4, color: "#94a3b8", cursor: "pointer", fontSize: 12 }} title="My Emails">📁</button>}
           <span style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>✉️ {meta.name}</span>
           {abOn && <div style={{ display: "flex", gap: 3 }}>{abCfg.variants.map((v, i) => <button key={v.id} onClick={() => setActiveVar(v.id)} style={{ padding: "4px 10px", background: activeVar === v.id ? ["#0ea5e9", "#ec4899", "#f59e0b", "#10b981"][i % 4] : BD, border: "none", borderRadius: 4, color: activeVar === v.id ? "#fff" : "#94a3b8", cursor: "pointer", fontSize: 11, fontWeight: 500 }}>{v.name} ({v.pct}%)</button>)}</div>}
           <div style={{ display: "flex", gap: 3, background: BG, borderRadius: 6, padding: 2 }}><button onClick={() => setPreview("desktop")} style={{ padding: "4px 10px", background: preview === "desktop" ? BD : "transparent", border: "none", borderRadius: 4, color: preview === "desktop" ? "#e2e8f0" : "#64748b", cursor: "pointer", fontSize: 11 }}>🖥️</button><button onClick={() => setPreview("mobile")} style={{ padding: "4px 10px", background: preview === "mobile" ? BD : "transparent", border: "none", borderRadius: 4, color: preview === "mobile" ? "#e2e8f0" : "#64748b", cursor: "pointer", fontSize: 11 }}>📱</button></div>
@@ -1184,7 +1222,7 @@ export default function EmailBuilder({ initialBrand, initialBlocks }) {
       </div>
 
       {/* RIGHT */}
-      {selComp && <div style={{ width: 300, background: PB, borderLeft: `1px solid ${BD}`, display: "flex", flexDirection: "column", flexShrink: 0 }}><div style={{ display: "flex", justifyContent: "space-between", padding: "8px 12px", borderBottom: `1px solid ${BD}` }}><span style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", color: "#94a3b8" }}>Properties</span><button onClick={() => setSelPath(null)} style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: 14 }}>✕</button></div><div style={{ flex: 1, overflowY: "auto", padding: 10 }}><PropEdit /></div></div>}
+      {selComp && <div style={{ width: 300, background: PB, borderLeft: `1px solid ${BD}`, display: "flex", flexDirection: "column", flexShrink: 0 }}><div style={{ display: "flex", justifyContent: "space-between", padding: "8px 12px", borderBottom: `1px solid ${BD}` }}><span style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", color: "#94a3b8" }}>Properties</span><button onClick={() => setSelPath(null)} style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: 14 }}>✕</button></div><div style={{ flex: 1, overflowY: "auto", padding: 10 }}><PropEditPanel selComp={selComp} selPath={selPath} brand={brand} brandPalette={brandPalette} onUpdate={updateComp} onDup={dupComp} onDel={delComp} onPick={setShowPicker} /></div></div>}
 
       {showPicker && <FragPicker model={showPicker} onClose={() => setShowPicker(null)} onSelect={(fId, vName) => { if (selComp?.type === "aem") updateComp({ ...selComp, props: { ...selComp.props, _fragId: fId, _var: vName } }); setShowPicker(null); }} />}
 

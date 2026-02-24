@@ -36,23 +36,25 @@ export const storage = {
 
     // Brand kit
     if (key === "brand_kit" && global) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("brand_kits")
         .select("config")
         .eq("org_id", orgId)
         .eq("is_default", true)
         .single();
+      if (error && error.code !== "PGRST116") throw error; // PGRST116 = no rows
       if (data) return { value: JSON.stringify(data.config) };
       return null;
     }
 
     // Content blocks
     if (key === "content_blocks" && global) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("content_blocks")
         .select("*")
         .eq("org_id", orgId)
         .order("created_at", { ascending: false });
+      if (error) throw error;
       if (data) {
         const blocks = data.map((b) => ({
           id: b.id,
@@ -71,11 +73,12 @@ export const storage = {
     // Per-email data
     if (key.startsWith("emails:")) {
       const emailId = key.replace("emails:", "");
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("emails")
         .select("*")
         .eq("id", emailId)
         .single();
+      if (error && error.code !== "PGRST116") throw error;
       if (data) {
         return {
           value: JSON.stringify({
@@ -119,45 +122,77 @@ export const storage = {
         .single();
 
       if (existing) {
-        await supabase
+        const { error } = await supabase
           .from("brand_kits")
           .update({ config })
           .eq("id", existing.id);
+        if (error) throw error;
       } else {
-        await supabase.from("brand_kits").insert({
+        const { error } = await supabase.from("brand_kits").insert({
           org_id: orgId,
           name: "Default Brand",
           config,
           is_default: true,
           created_by: userId,
         });
+        if (error) throw error;
       }
       return;
     }
 
-    // Content blocks — bulk replace
+    // Content blocks — full sync (upsert + delete removed)
     if (key === "content_blocks" && global) {
       const blocks = JSON.parse(value);
-      // For individual block operations, we handle add/delete separately
-      // This bulk path syncs the full list
+      const incomingIds = blocks.map((b: { id: string }) => b.id);
+
+      // Upsert each block (insert or update)
       for (const block of blocks) {
-        const existing = await supabase
+        const blockData = {
+          name: block.name,
+          description: block.desc || null,
+          category: block.cat || "Content",
+          tags: block.tags || [],
+          components: block.comps || [],
+        };
+
+        const { data: existing } = await supabase
           .from("content_blocks")
           .select("id")
           .eq("id", block.id)
-          .single();
+          .maybeSingle();
 
-        if (!existing.data) {
-          await supabase.from("content_blocks").insert({
+        if (existing) {
+          const { error } = await supabase
+            .from("content_blocks")
+            .update(blockData)
+            .eq("id", block.id);
+          if (error) throw error;
+        } else {
+          const { error } = await supabase.from("content_blocks").insert({
             id: block.id,
             org_id: orgId,
-            name: block.name,
-            description: block.desc || null,
-            category: block.cat || "Content",
-            tags: block.tags || [],
-            components: block.comps || [],
             created_by: userId,
+            ...blockData,
           });
+          if (error) throw error;
+        }
+      }
+
+      // Delete blocks that were removed locally
+      const { data: dbBlocks } = await supabase
+        .from("content_blocks")
+        .select("id")
+        .eq("org_id", orgId);
+      if (dbBlocks) {
+        const toDelete = dbBlocks
+          .filter((db) => !incomingIds.includes(db.id))
+          .map((db) => db.id);
+        if (toDelete.length > 0) {
+          const { error } = await supabase
+            .from("content_blocks")
+            .delete()
+            .in("id", toDelete);
+          if (error) throw error;
         }
       }
       return;
@@ -188,19 +223,87 @@ export const storage = {
       };
 
       if (existing) {
-        await supabase
+        const { error } = await supabase
           .from("emails")
           .update(emailData)
           .eq("id", emailId);
+        if (error) throw error;
       } else {
-        await supabase.from("emails").insert({
+        const { error } = await supabase.from("emails").insert({
           id: emailId,
           org_id: orgId,
           created_by: userId,
           ...emailData,
         });
+        if (error) throw error;
       }
       return;
     }
+  },
+
+  /**
+   * List emails for the current user's org.
+   * Returns lightweight summaries sorted by most recently updated.
+   */
+  async list(prefix: string): Promise<Array<{ id: string; name: string; subject: string; status: string; updated_at: string }>> {
+    if (prefix !== "emails") return [];
+    const orgId = await getUserOrgId();
+    const { data, error } = await supabase
+      .from("emails")
+      .select("id, name, subject, status, updated_at")
+      .eq("org_id", orgId)
+      .order("updated_at", { ascending: false })
+      .limit(50);
+    if (error) throw error;
+    return data || [];
+  },
+
+  /**
+   * Delete an email by key ("emails:{id}").
+   */
+  async delete(key: string): Promise<void> {
+    if (!key.startsWith("emails:")) return;
+    const emailId = key.replace("emails:", "");
+    const { error } = await supabase
+      .from("emails")
+      .delete()
+      .eq("id", emailId);
+    if (error) throw error;
+  },
+
+  /**
+   * Create a version snapshot in email_versions.
+   * Called on explicit saves (manual save button or Cmd+S).
+   */
+  async createVersion(
+    emailId: string,
+    components: unknown,
+    globalStyles: unknown,
+    meta: unknown
+  ): Promise<void> {
+    const userId = await getUserId();
+
+    // Get the current max version_number for this email
+    const { data: latest } = await supabase
+      .from("email_versions")
+      .select("version_number")
+      .eq("email_id", emailId)
+      .order("version_number", { ascending: false })
+      .limit(1)
+      .single();
+
+    const nextVersion = (latest?.version_number || 0) + 1;
+
+    const { error } = await supabase
+      .from("email_versions")
+      .insert({
+        email_id: emailId,
+        version_number: nextVersion,
+        components: components,
+        global_styles: globalStyles,
+        meta: meta,
+        created_by: userId,
+      });
+    if (error) throw error;
   },
 };

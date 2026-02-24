@@ -4,7 +4,12 @@ import BuilderClient from "./builder-client";
 
 export const dynamic = "force-dynamic";
 
-export default async function BuilderPage() {
+export default async function BuilderPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ id?: string }>;
+}) {
+  const params = await searchParams;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
@@ -44,12 +49,25 @@ export default async function BuilderPage() {
     createdAt: b.created_at,
   }));
 
+  // If ?id=xxx, fetch the email for editing
+  let initialEmail = null;
+  if (params.id) {
+    const { data } = await supabase
+      .from("emails")
+      .select("*")
+      .eq("id", params.id)
+      .eq("org_id", profile?.org_id)
+      .single();
+    initialEmail = data;
+  }
+
   return (
     <BuilderClient
       user={{ id: user.id, email: user.email! }}
       orgId={profile?.org_id}
       initialBrand={brandKit?.config || null}
       initialBlocks={initialBlocks}
+      initialEmail={initialEmail}
     />
   );
 }
